@@ -61,7 +61,7 @@ html"""
 """
 
 # ╔═╡ af55b1c3-8825-46b1-986b-e2af7e57907a
-plot_common_args = (grid = true, gridlinewidth=3, gridstyle = :dot,minorgrid=true, box = :on, linewidth = 4 , xlabel = "Wavelength, μm" , ylabel = "R");
+plot_common_args = (grid = true, gridlinewidth=3, gridstyle = :dot,minorgrid=true, box = :on, linewidth = 4 , xlabel = "Wavelength, μm" , ylabel = "R" , dpi=600);
 
 # ╔═╡ e5152a42-16c6-4ee2-a3a9-479b417caba3
 vis_nir_merged = Ref{Matrix{Float64}}()
@@ -85,37 +85,12 @@ begin
 	end
 end
 
-# ╔═╡ 3cf28b79-09e3-4bed-9b9c-2811fbcdf4d7
-
-function calibrate(V , eth)
-	_V = copy(V)
-	y = @view _V[:,2]
-	x = @view _V[:,1]
-	@. y *= eth(x)
-	return _V
-end
-
 # ╔═╡ ab6c19a9-6f23-43af-be09-f0b52d3c6310
 begin 
 	vis_data  = readdlm(joinpath(ethalons_dir , "BaSO4.txt"))
 	gold_data_nir = readdlm(joinpath(ethalons_dir , "gold_nir.txt"))
 	gold_data_ir = readdlm(joinpath(ethalons_dir , "gold_ir.txt"))
 end;
-
-# ╔═╡ 8425182a-b9c4-4e3f-ae06-c20e180b126a
-function split_and_mean(m)
-	# gets matrix input takes first column as l and evaluates r as an average of other columns
-	l = vec(m[:,1])
-	r = zeros(eltype(l) , length(l))
-	M = size(m , 2) - 1
-	@show M
-	for i in 1:M 
-		_V = @view m[: , i  + 1]
-		@. r +=_V
-	end
-	@. r /=M
-	return (l , r)
-end
 
 # ╔═╡ 457b939f-f980-4519-a277-2f80f842243e
 md"""
@@ -174,6 +149,18 @@ md" Bernstein polynomial degree $(@bind nir_ir_bernstein_N Select(1:1:12 , defau
 # ╔═╡ b628823b-2b59-4556-bb77-696d5fb7a301
 p_merged[]
 
+# ╔═╡ 4d065521-247a-4362-8816-667ae213457a
+md"Check to show all results $(@bind is_show_folder_data CheckBox(true))"
+
+# ╔═╡ f2f9c800-fc2f-45c6-8c46-4aca1ffe6b91
+md" Data type $(@bind data_to_compare Select([:R , :ϵ]))"
+
+# ╔═╡ 211282c3-9880-4ca4-ab4a-915dee464852
+is_show_folder_data && @bind files_to_load MultiSelect([ f for f in readdir(results_dir)    if isfile(joinpath(results_dir , f))        ])
+
+# ╔═╡ dee66082-6138-436c-b19d-3bfbd5d8ad6f
+@bind x_combined_range PlutoUI.RangeSlider(0:1e-3:20 , default = 0.4:1e-3:17) 
+
 # ╔═╡ 40c50676-1382-4693-8d81-15f8692a14a9
 function average_by_x(x, y; sorted=true)
     # Map each x to (sum_of_y, count)
@@ -193,98 +180,15 @@ function average_by_x(x, y; sorted=true)
     return x_unique, y_mean
 end
 
-# ╔═╡ 66dde037-402f-4d49-adfb-cde03f2e1c0d
-function load_ethalons()
-	vis_data  = readdlm(joinpath(ethalons_dir , "BaSO4.txt"))
-	gold_data_nir = readdlm(joinpath(ethalons_dir , "gold_nir.txt"))
-	gold_data_ir = readdlm(joinpath(ethalons_dir , "gold_ir.txt"))
-	
-	l_vis , r_vis = split_and_mean(vis_data)
-	vis = linear_interpolation(l_vis , r_vis)
-
-	l_gold_nir , r_gold_nir = split_and_mean(gold_data_nir)
-	l_gold , r_gold =split_and_mean(gold_data_ir)
-
-	l_ir = vcat(l_gold_nir , l_gold)
-	r_ir = vcat(r_gold_nir , r_gold)
-	i = sortperm(l_ir)
-	
-	(l , r)  = average_by_x(l_ir[i], r_ir[i]; sorted=true)
-	ir = linear_interpolation(l , r)
-	return (vis , ir)
-end
-
-# ╔═╡ 0130254d-8d1c-4b52-8ae7-8a2613a61f57
-(vis_eth , ir_eth)  = load_ethalons()
-
 # ╔═╡ d4159420-ff69-4a86-aab4-75d99a7dccc4
 function parse_sample_number(str)
 	reg = r"_(\d+\.\d+)"
-	return String(first(collect(first(eachmatch(reg , str)))))
-end
-
-# ╔═╡ 46a378b8-cf7c-49cd-8350-28b9171666d9
-begin 
-	names = (:VIS , :NIR , :IR)
-	names_str = [String(f) for f in names]
-	data = Dict{String, NamedTuple{names , NTuple{3 ,Matrix{Float64}}}}()
-	data_cal = Dict{String, NamedTuple{names , NTuple{3 ,Matrix{Float64}}}}()
-	data_names = [ parse_sample_number(f)   for f in readdir(data_dir_ir) if isfile(joinpath(data_dir_ir , f))]
-	for n in data_names 
-		vals = ntuple(3) do i 
-			fld = joinpath(data_dir , String(names[i]))
-			cnt = contains(n)
-			f_i = first(f for f in readdir(fld) if cnt(f))
-			full_file = joinpath(fld , f_i)
-			is_v = names[i] == :VIS 
-			v = readdlm(full_file , (is_v ? ',' : ';') , Float64 )
-			v1 = @view v[: , 1]
-			v2 = @view v[: , 2]	
-			
-			@. v2 /= 100.0
-			if is_v
-				@. v1 /= 1000.0
-			else
-				@. v1 = 10000.0 / v1
-				_inds = sortperm(v1)
-				@. v1 = v1[_inds]
-				@. v2 = v2[_inds]
-			end
-			v_cal = calibrate(v , (is_v ? vis_eth : ir_eth) )
-			return (v , v_cal)
-		end
-		data[n] = Tuple(first(v) for v in vals)
-		data_cal[n] = Tuple(last(v) for v in vals)
-	end
 	
-end
-	#for (fold , d , mult) in zip(("IR" , "NIR" , "VIS") , ())
-
-# ╔═╡ 3d8ed83a-5019-4584-a7ae-0d2d59116238
-md""" 
-	$(@bind is_cal Select([:cal , :nocal] , default = :cal)) \
-
-
-	$(@bind sample2plot PlutoUI.MultiSelect(data_names)) \
-
-	$(@bind types PlutoUI.MultiSelect(names_str, default = names_str)) \
-
-	$(@bind x_range PlutoUI.RangeSlider(0:1e-2:20 , default = 0.1:1e-2:17)) \
-
-	$(@bind y_range PlutoUI.RangeSlider(0:1e-3:1.3 , default = 0.05:1e-3:1.2)) 
-	"""	
-
-# ╔═╡ ab35716b-5fd9-4e4f-8ff1-b3d8082e5c09
-md" Select sample number $(@bind sample2merge PlutoUI.Select(data_names)) " 
-
-# ╔═╡ 655a7200-5d49-4171-be8e-f92efe6ff7b8
-if isassigned(fully_merged) && !isempty(fully_merged[])
-	save_but
-	result_file = save_file(joinpath(results_dir , "$(sample2merge)_res.csv") , filterlist="csv")
-	if length(result_file) > 0 
-		out = hcat(fully_merged[]  , 1 .- fully_merged[][:,2])
-		writedlm(result_file , out)
-		fully_merged[] = Matrix{Float64}(undef  , 0 , 0)
+	return try 
+				s = first(eachmatch(reg , str))
+	 			  String(first(collect(s)))
+		catch er
+				""
 	end
 end
 
@@ -313,18 +217,22 @@ function autoscale_y!(p::Plots.Plot; subplot::Int=1, margin::Real=0.05)
     return p
 end
 
-# ╔═╡ 5991d57e-9460-4ccc-933d-929d798e16de
-begin 
-	pl = plot(;plot_common_args...)
-	data_plot = is_cal == :cal ? data_cal : data
-	for sm in sample2plot
-		for t in types
-			m = data_plot[sm][Symbol(t)]
-			plot!(pl , m[:,1] , m[:,2] , label = String(sm);plot_common_args...)
-		end
+# ╔═╡ 772e521e-51b1-428b-a6f9-857940bc427d
+if is_show_folder_data && !isempty(files_to_load)
+	reg = r"(\d+\.\d+)"
+	all_plot = plot(;plot_common_args...)
+	is_refl  = data_to_compare==:R 
+	col_ind = is_refl ? 2 : 3
+	for f in files_to_load
+		_d  = readdlm(joinpath(results_dir , f))
+		m = match(reg , f)
+		nm = !isnothing(m) ? String(m.match) : f
+		plot!(all_plot , _d[:,1] , _d[:,col_ind]; plot_common_args... , label = nm)
 	end
-	xlims!(pl , extrema(x_range))
-	autoscale_y!(pl)
+	y_lbl = is_refl ? "Spectral reflectivity" : "Spectral emissivity"
+	xlims!(all_plot , extrema(x_combined_range))
+	ylabel!(all_plot , y_lbl)
+	autoscale_y!(all_plot)
 end
 
 # ╔═╡ 9d5092d2-d295-42d3-8c12-cfd81293a569
@@ -401,6 +309,134 @@ function merge_data(d1, d2, merge_range::NTuple{2,Float64},     polytype)
     return ((x_cut, y_cut), (merge_l, merge_vals), (xm, ym), sp)
 end
 
+# ╔═╡ 3cf28b79-09e3-4bed-9b9c-2811fbcdf4d7
+
+function calibrate(V , eth)
+	_V = copy(V)
+	y = @view _V[:,2]
+	x = @view _V[:,1]
+	@. y *= eth(x)
+	return _V
+end
+
+# ╔═╡ 8425182a-b9c4-4e3f-ae06-c20e180b126a
+function split_and_mean(m)
+	# gets matrix input takes first column as l and evaluates r as an average of other columns
+	l = vec(m[:,1])
+	r = zeros(eltype(l) , length(l))
+	M = size(m , 2) - 1
+	@show M
+	for i in 1:M 
+		_V = @view m[: , i  + 1]
+		@. r +=_V
+	end
+	@. r /=M
+	return (l , r)
+end
+
+# ╔═╡ 66dde037-402f-4d49-adfb-cde03f2e1c0d
+function load_ethalons()
+	vis_data  = readdlm(joinpath(ethalons_dir , "BaSO4.txt"))
+	gold_data_nir = readdlm(joinpath(ethalons_dir , "gold_nir.txt"))
+	gold_data_ir = readdlm(joinpath(ethalons_dir , "gold_ir.txt"))
+	
+	l_vis , r_vis = split_and_mean(vis_data)
+	vis = linear_interpolation(l_vis , r_vis)
+
+	l_gold_nir , r_gold_nir = split_and_mean(gold_data_nir)
+	l_gold , r_gold =split_and_mean(gold_data_ir)
+
+	l_ir = vcat(l_gold_nir , l_gold)
+	r_ir = vcat(r_gold_nir , r_gold)
+	i = sortperm(l_ir)
+	
+	(l , r)  = average_by_x(l_ir[i], r_ir[i]; sorted=true)
+	ir = linear_interpolation(l , r)
+	return (vis , ir)
+end
+
+# ╔═╡ 0130254d-8d1c-4b52-8ae7-8a2613a61f57
+(vis_eth , ir_eth)  = load_ethalons()
+
+# ╔═╡ 46a378b8-cf7c-49cd-8350-28b9171666d9
+begin 
+	names = (:VIS , :NIR , :IR)
+	names_str = [String(f) for f in names]
+	data = Dict{String, NamedTuple{names , NTuple{3 ,Matrix{Float64}}}}()
+	data_cal = Dict{String, NamedTuple{names , NTuple{3 ,Matrix{Float64}}}}()
+	data_names = [ parse_sample_number(f)   for f in readdir(data_dir_ir) if isfile(joinpath(data_dir_ir , f))]
+	for n in data_names 
+		vals = ntuple(3) do i 
+			fld = joinpath(data_dir , String(names[i]))
+			cnt = contains(n)
+			f_i = first(f for f in readdir(fld) if cnt(f))
+			full_file = joinpath(fld , f_i)
+			is_v = names[i] == :VIS 
+			v = readdlm(full_file , (is_v ? ',' : ';') , Float64 )
+			v1 = @view v[: , 1]
+			v2 = @view v[: , 2]	
+			
+			@. v2 /= 100.0
+			if is_v
+				@. v1 /= 1000.0
+			else
+				@. v1 = 10000.0 / v1
+				_inds = sortperm(v1)
+				@. v1 = v1[_inds]
+				@. v2 = v2[_inds]
+			end
+			v_cal = calibrate(v , (is_v ? vis_eth : ir_eth) )
+			return (v , v_cal)
+		end
+		data[n] = Tuple(first(v) for v in vals)
+		data_cal[n] = Tuple(last(v) for v in vals)
+	end
+	
+end
+	#for (fold , d , mult) in zip(("IR" , "NIR" , "VIS") , ())
+
+# ╔═╡ 3d8ed83a-5019-4584-a7ae-0d2d59116238
+md""" 
+	$(@bind is_cal Select([:cal , :nocal] , default = :cal)) \
+
+
+	$(@bind sample2plot PlutoUI.MultiSelect(data_names)) \
+
+	$(@bind types PlutoUI.MultiSelect(names_str, default = names_str)) \
+
+	$(@bind x_range PlutoUI.RangeSlider(0:1e-2:20 , default = 0.1:1e-2:17)) \
+
+	$(@bind y_range PlutoUI.RangeSlider(0:1e-3:1.3 , default = 0.05:1e-3:1.2)) 
+	"""	
+
+# ╔═╡ 5991d57e-9460-4ccc-933d-929d798e16de
+begin 
+	pl = plot(;plot_common_args...)
+	data_plot = is_cal == :cal ? data_cal : data
+	for sm in sample2plot
+		for t in types
+			m = data_plot[sm][Symbol(t)]
+			plot!(pl , m[:,1] , m[:,2] , label = String(sm);plot_common_args...)
+		end
+	end
+	xlims!(pl , extrema(x_range))
+	autoscale_y!(pl)
+end
+
+# ╔═╡ ab35716b-5fd9-4e4f-8ff1-b3d8082e5c09
+md" Select sample number $(@bind sample2merge PlutoUI.Select(data_names)) " 
+
+# ╔═╡ 655a7200-5d49-4171-be8e-f92efe6ff7b8
+if isassigned(fully_merged) && !isempty(fully_merged[])
+	save_but
+	result_file = save_file(joinpath(results_dir , "$(sample2merge)_res.csv") , filterlist="csv")
+	if length(result_file) > 0 
+		out = hcat(fully_merged[]  , 1 .- fully_merged[][:,2])
+		writedlm(result_file , out)
+		fully_merged[] = Matrix{Float64}(undef  , 0 , 0)
+	end
+end
+
 # ╔═╡ 2f3c7d9d-e590-4d63-943f-26ba3b6111d6
 if !isempty(sample2merge) 
 	d1 = data_cal[sample2merge][:VIS]
@@ -456,12 +492,10 @@ end
 # ╠═ed3276ba-7c3e-42ea-88c6-4d58fe9c1d3a
 # ╠═aec51390-534c-4493-b1f8-e139032acbc9
 # ╟─46a378b8-cf7c-49cd-8350-28b9171666d9
-# ╟─3cf28b79-09e3-4bed-9b9c-2811fbcdf4d7
-# ╟─3d8ed83a-5019-4584-a7ae-0d2d59116238
+# ╠═3d8ed83a-5019-4584-a7ae-0d2d59116238
 # ╠═5991d57e-9460-4ccc-933d-929d798e16de
 # ╟─ab6c19a9-6f23-43af-be09-f0b52d3c6310
 # ╠═0130254d-8d1c-4b52-8ae7-8a2613a61f57
-# ╟─8425182a-b9c4-4e3f-ae06-c20e180b126a
 # ╟─457b939f-f980-4519-a277-2f80f842243e
 # ╟─ab35716b-5fd9-4e4f-8ff1-b3d8082e5c09
 # ╟─9aea683f-dbe8-40d4-86b3-4f19158d7651
@@ -478,9 +512,16 @@ end
 # ╟─8c2f9219-e895-4b23-89d5-8fd07a003c83
 # ╟─fc3a7561-50e9-4294-b1b7-53f4ddb1975f
 # ╠═b628823b-2b59-4556-bb77-696d5fb7a301
-# ╟─655a7200-5d49-4171-be8e-f92efe6ff7b8
+# ╠═655a7200-5d49-4171-be8e-f92efe6ff7b8
+# ╟─4d065521-247a-4362-8816-667ae213457a
+# ╠═f2f9c800-fc2f-45c6-8c46-4aca1ffe6b91
+# ╠═211282c3-9880-4ca4-ab4a-915dee464852
+# ╠═dee66082-6138-436c-b19d-3bfbd5d8ad6f
+# ╟─772e521e-51b1-428b-a6f9-857940bc427d
 # ╟─66dde037-402f-4d49-adfb-cde03f2e1c0d
 # ╟─40c50676-1382-4693-8d81-15f8692a14a9
-# ╟─d4159420-ff69-4a86-aab4-75d99a7dccc4
+# ╠═d4159420-ff69-4a86-aab4-75d99a7dccc4
 # ╟─55213f0f-f282-47d1-835c-9e738313d6a1
 # ╟─9d5092d2-d295-42d3-8c12-cfd81293a569
+# ╟─3cf28b79-09e3-4bed-9b9c-2811fbcdf4d7
+# ╟─8425182a-b9c4-4e3f-ae06-c20e180b126a
